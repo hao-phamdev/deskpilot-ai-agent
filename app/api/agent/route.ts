@@ -60,6 +60,10 @@ const BodySchema = z.object({
     .max(120),
 });
 
+function redact(text: string) {
+  return text.replace(/sk-ant-[A-Za-z0-9_-]+/g, "sk-ant-[REDACTED]");
+}
+
 function json(status: number, body: unknown, headers?: Record<string, string>) {
   return Response.json(body, { status, headers });
 }
@@ -129,7 +133,7 @@ export async function POST(req: Request) {
       return json(500, { error: "The server's Claude API key is invalid or lacks access.", kind: "config" });
     }
     if (error instanceof Anthropic.BadRequestError) {
-      console.error("[agent] bad request:", error.message);
+      console.error("[agent] bad request:", redact(error.message));
       return json(400, { error: `Claude rejected the request: ${error.message}`, kind: "bad_request" });
     }
     if (error instanceof Anthropic.APIConnectionTimeoutError || error instanceof Anthropic.APIConnectionError) {
@@ -143,7 +147,13 @@ export async function POST(req: Request) {
         retryAfter: overloaded ? 5 : undefined,
       });
     }
-    console.error("[agent] unexpected error:", error);
+    // Never log raw error messages verbatim: they can echo headers (e.g. a malformed API key).
+    const name = error instanceof Error ? error.name : typeof error;
+    const msg = error instanceof Error ? redact(error.message).slice(0, 300) : "";
+    console.error(`[agent] unexpected error: ${name}: ${msg}`);
+    if (error instanceof TypeError && /header/i.test(msg)) {
+      return json(500, { error: "The server's ANTHROPIC_API_KEY value is malformed. It must be only the key (sk-ant-…).", kind: "config" });
+    }
     return json(500, { error: "Unexpected server error.", kind: "internal" });
   }
 }
